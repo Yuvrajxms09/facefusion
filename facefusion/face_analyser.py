@@ -2,7 +2,7 @@ from typing import List, Optional
 
 import numpy
 
-from facefusion import state_manager
+from facefusion import profiler, state_manager
 from facefusion.common_helper import get_first
 from facefusion.face_classifier import classify_face
 from facefusion.face_detector import detect_faces, detect_faces_by_angle
@@ -107,16 +107,18 @@ def get_many_faces(vision_frames : List[VisionFrame], use_tracking : bool = True
 				all_face_landmarks_5 = []
 
 				for face_detector_angle in state_manager.get_item('face_detector_angles'):
-					if face_detector_angle == 0:
-						bounding_boxes, face_scores, face_landmarks_5 = detect_faces(vision_frame)
-					else:
-						bounding_boxes, face_scores, face_landmarks_5 = detect_faces_by_angle(vision_frame, face_detector_angle)
+					with profiler.measure('face_detection_total_ms'):
+						if face_detector_angle == 0:
+							bounding_boxes, face_scores, face_landmarks_5 = detect_faces(vision_frame)
+						else:
+							bounding_boxes, face_scores, face_landmarks_5 = detect_faces_by_angle(vision_frame, face_detector_angle)
 					all_bounding_boxes.extend(bounding_boxes)
 					all_face_scores.extend(face_scores)
 					all_face_landmarks_5.extend(face_landmarks_5)
 
 				if all_bounding_boxes and all_face_scores and all_face_landmarks_5 and state_manager.get_item('face_detector_score') > 0:
-					faces = create_faces(vision_frame, all_bounding_boxes, all_face_scores, all_face_landmarks_5)
+					with profiler.measure('face_analysis_build_ms'):
+						faces = create_faces(vision_frame, all_bounding_boxes, all_face_scores, all_face_landmarks_5)
 
 					if faces:
 						many_faces.extend(faces)

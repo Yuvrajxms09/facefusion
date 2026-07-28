@@ -419,8 +419,12 @@ def process_image(start_time : float) -> ErrorCode:
 
 
 def process_video(start_time : float) -> ErrorCode:
+	profiler.reset()
 	trim_frame_start, trim_frame_end = restrict_trim_frame(state_manager.get_item('target_path'), state_manager.get_item('trim_frame_start'), state_manager.get_item('trim_frame_end'))
-	if analyse_video(state_manager.get_item('target_path'), trim_frame_start, trim_frame_end):
+	content_analysis_start = time()
+	content_analysis_result = analyse_video(state_manager.get_item('target_path'), trim_frame_start, trim_frame_end)
+	profiler.add('wall_content_analysis_ms', (time() - content_analysis_start) * 1000.0)
+	if content_analysis_result:
 		return 3
 
 	logger.debug(wording.get('clearing_temp'), __name__)
@@ -432,6 +436,7 @@ def process_video(start_time : float) -> ErrorCode:
 	output_video_resolution = scale_resolution(detect_video_resolution(state_manager.get_item('target_path')), state_manager.get_item('output_video_scale'))
 	temp_video_resolution = restrict_video_resolution(state_manager.get_item('target_path'), output_video_resolution)
 	temp_video_fps = restrict_video_fps(state_manager.get_item('target_path'), state_manager.get_item('output_video_fps'))
+	processing_start = time()
 	streaming_used = False
 	if _can_use_streaming_pipeline():
 		logger.info('Streaming frames directly through CUDA pipeline', __name__)
@@ -492,12 +497,15 @@ def process_video(start_time : float) -> ErrorCode:
 			process_manager.end()
 			return 1
 
+	profiler.add('wall_video_processing_ms', (time() - processing_start) * 1000.0)
+
 	for processor_module in get_processors_modules(state_manager.get_item('processors')):
 		processor_module.post_process()
 
 	if is_process_stopping():
 		return 4
 
+	audio_finalize_start = time()
 	if state_manager.get_item('output_audio_volume') == 0:
 		logger.info(wording.get('skipping_audio'), __name__)
 		move_temp_file(state_manager.get_item('target_path'), state_manager.get_item('output_path'))
@@ -523,11 +531,13 @@ def process_video(start_time : float) -> ErrorCode:
 					return 4
 				logger.warn(wording.get('restoring_audio_skipped'), __name__)
 				move_temp_file(state_manager.get_item('target_path'), state_manager.get_item('output_path'))
+	profiler.add('wall_audio_finalize_ms', (time() - audio_finalize_start) * 1000.0)
 
 	logger.debug(wording.get('clearing_temp'), __name__)
 	clear_temp_directory(state_manager.get_item('target_path'))
 
 	if is_video(state_manager.get_item('output_path')):
+		profiler.add('wall_job_total_ms', (time() - start_time) * 1000.0)
 		profiler.log_summary('video')
 		logger.info(wording.get('processing_video_succeeded').format(seconds = calculate_end_time(start_time)), __name__)
 	else:
@@ -628,10 +638,20 @@ def _flush_stream_future(inflight : Deque[Tuple[int, Future[numpy.ndarray]]], wr
 	if frame_data.dtype != numpy.uint8:
 		frame_data = frame_data.clip(0, 255).astype(numpy.uint8)
 	if writer.stdin:
-		with profiler.measure('video_io_ms'):
+		with profiler.measure('video_encode_write_ms'):
 			writer.stdin.write(frame_data.tobytes())
 	progress.update()
 	return True
+
+
+def _profiled_frame_iterator(frame_iterator : Iterator[Tuple[int, numpy.ndarray]]) -> Iterator[Tuple[int, numpy.ndarray]]:
+	while True:
+		try:
+			with profiler.measure('video_decode_read_ms'):
+				frame = next(frame_iterator)
+		except StopIteration:
+			return
+		yield frame
 
 
 def _build_stream_generator_pyav(target_path : str, temp_video_resolution : Tuple[int, int], temp_video_fps : float, trim_frame_start : int, trim_frame_end : int) -> Optional[Tuple[Iterator[Tuple[int, numpy.ndarray]], Callable[[], None]]]:
@@ -752,7 +772,7 @@ def _run_streaming_loop(
 		with tqdm(total = frame_total, desc = wording.get('processing'), unit = 'frame', ascii = ' =', disable = state_manager.get_item('log_level') in [ 'warn', 'error' ]) as progress:
 			progress.set_postfix(execution_providers = providers)
 			with ThreadPoolExecutor(max_workers = pipeline_depth) as executor:
-				for frame_index, frame_ndarray in frame_iterator:
+				for frame_index, frame_ndarray in _profiled_frame_iterator(frame_iterator):
 					if is_process_stopping():
 						break
 					future = executor.submit(process_frame_runtime, frame_ndarray, frame_index, reference_vision_frame, source_vision_frames, source_audio_path, temp_video_fps)
@@ -828,15 +848,16 @@ def process_video_streaming(temp_video_resolution : Tuple[int, int], temp_video_
 	frame_iterator, cleanup = decoder
 	processed = _run_streaming_loop(frame_iterator, cleanup, writer, frame_total, providers, pipeline_depth, reference_vision_frame, source_vision_frames, source_audio_path, temp_video_fps)
 
-	if writer.stdin:
+	with profiler.measure('wall_video_writer_finalize_ms'):
+		if writer.stdin:
+			try:
+				writer.stdin.close()
+			except Exception:
+				pass
 		try:
-			writer.stdin.close()
+			writer.wait()
 		except Exception:
 			pass
-	try:
-		writer.wait()
-	except Exception:
-		pass
 
 	if writer.returncode not in (0, None):
 		logger.debug(f'ffmpeg writer exited with code {writer.returncode}', __name__)

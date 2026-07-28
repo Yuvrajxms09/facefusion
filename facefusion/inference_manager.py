@@ -7,7 +7,7 @@ from onnxruntime import InferenceSession, SessionOptions, GraphOptimizationLevel
 
 import torch
 
-from facefusion import logger, process_manager, state_manager, wording
+from facefusion import logger, process_manager, profiler, state_manager, wording
 from facefusion.app_context import detect_app_context
 from facefusion.execution import create_inference_session_providers
 from facefusion.exit_helper import fatal_exit
@@ -120,7 +120,9 @@ def create_inference_session(model_path : str, execution_device_id : str, execut
         if configured_threads:
             sess_options.intra_op_num_threads = configured_threads
             sess_options.inter_op_num_threads = max(1, configured_threads // 2)
-        inference_session = InferenceSession(model_path, sess_options = sess_options, providers = inference_session_providers)
+        with profiler.measure('model_load_total_ms'):
+            with profiler.measure(f'model_load_{model_file_name}_ms'):
+                inference_session = InferenceSession(model_path, sess_options = sess_options, providers = inference_session_providers)
     except Exception as exception:
         logger.error(wording.get('loading_model_failed').format(model_name = model_file_name), __name__)
         logger.debug(str(exception), __name__)

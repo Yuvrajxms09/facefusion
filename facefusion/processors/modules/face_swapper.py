@@ -925,6 +925,7 @@ def swap_faces_batch(source_face : Face, target_faces : List[Face], target_visio
 			use_trt = True
 			outputs_parts : List["cp.ndarray"] = []
 			cursor = 0
+			t_run_start = time()
 			while cursor < batch_total:
 				end = min(cursor + runner.max_batch, batch_total)
 				src_slice = src_cu[cursor:end]
@@ -932,6 +933,7 @@ def swap_faces_batch(source_face : Face, target_faces : List[Face], target_visio
 				run_out = runner.run(src_slice, tgt_slice)
 				outputs_parts.append(run_out)
 				cursor = end
+			t_run_end = time()
 			if outputs_parts:
 				outputs_batch = cp.concatenate(outputs_parts, axis = 0)
 
@@ -1066,44 +1068,52 @@ def swap_face(source_face : Face, target_face : Face, temp_vision_frame : Vision
 			return temp_vision_frame
 	except Exception:
 		track_token = None
-	crop_vision_frame, affine_matrix = warp_face_by_face_landmark_5(temp_vision_frame, target_face.landmark_set.get('5/68'), model_template, pixel_boost_size, track_token=track_token)
+	with profiler.measure('swapper_warp_ms'):
+		crop_vision_frame, affine_matrix = warp_face_by_face_landmark_5(temp_vision_frame, target_face.landmark_set.get('5/68'), model_template, pixel_boost_size, track_token=track_token)
 	temp_vision_frames = []
 	crop_masks = []
 
-	if 'box' in state_manager.get_item('face_mask_types'):
-		box_mask = create_box_mask(crop_vision_frame, state_manager.get_item('face_mask_blur'), state_manager.get_item('face_mask_padding'))
-		crop_masks.append(box_mask)
+	with profiler.measure('swapper_mask_ms'):
+		if 'box' in state_manager.get_item('face_mask_types'):
+			box_mask = create_box_mask(crop_vision_frame, state_manager.get_item('face_mask_blur'), state_manager.get_item('face_mask_padding'))
+			crop_masks.append(box_mask)
 
-	if 'occlusion' in state_manager.get_item('face_mask_types'):
-		occlusion_mask = create_occlusion_mask(crop_vision_frame)
-		crop_masks.append(occlusion_mask)
+		if 'occlusion' in state_manager.get_item('face_mask_types'):
+			occlusion_mask = create_occlusion_mask(crop_vision_frame)
+			crop_masks.append(occlusion_mask)
 
 	# Fast path when pixel boost is 1: avoid reshape/loop overhead
 	if pixel_boost_total <= 1:
-		pixel_boost_vision_frame = prepare_crop_frame(crop_vision_frame)
+		with profiler.measure('swapper_preprocess_ms'):
+			pixel_boost_vision_frame = prepare_crop_frame(crop_vision_frame)
 		pixel_boost_vision_frame = forward_swap_face(source_face, target_face, pixel_boost_vision_frame)
-		crop_vision_frame = normalize_crop_frame(pixel_boost_vision_frame)
+		with profiler.measure('swapper_postprocess_ms'):
+			crop_vision_frame = normalize_crop_frame(pixel_boost_vision_frame)
 	else:
 		pixel_boost_vision_frames = implode_pixel_boost(crop_vision_frame, pixel_boost_total, model_size)
 		for pixel_boost_vision_frame in pixel_boost_vision_frames:
-			pixel_boost_vision_frame = prepare_crop_frame(pixel_boost_vision_frame)
+			with profiler.measure('swapper_preprocess_ms'):
+				pixel_boost_vision_frame = prepare_crop_frame(pixel_boost_vision_frame)
 			pixel_boost_vision_frame = forward_swap_face(source_face, target_face, pixel_boost_vision_frame)
-			pixel_boost_vision_frame = normalize_crop_frame(pixel_boost_vision_frame)
+			with profiler.measure('swapper_postprocess_ms'):
+				pixel_boost_vision_frame = normalize_crop_frame(pixel_boost_vision_frame)
 			temp_vision_frames.append(pixel_boost_vision_frame)
 		crop_vision_frame = explode_pixel_boost(temp_vision_frames, pixel_boost_total, model_size, pixel_boost_size)
 
-	if 'area' in state_manager.get_item('face_mask_types'):
-		face_landmark_68 = cv2.transform(target_face.landmark_set.get('68').reshape(1, -1, 2), affine_matrix).reshape(-1, 2)
-		area_mask = create_area_mask(crop_vision_frame, face_landmark_68, state_manager.get_item('face_mask_areas'))
-		crop_masks.append(area_mask)
+	with profiler.measure('swapper_mask_ms'):
+		if 'area' in state_manager.get_item('face_mask_types'):
+			face_landmark_68 = cv2.transform(target_face.landmark_set.get('68').reshape(1, -1, 2), affine_matrix).reshape(-1, 2)
+			area_mask = create_area_mask(crop_vision_frame, face_landmark_68, state_manager.get_item('face_mask_areas'))
+			crop_masks.append(area_mask)
 
-	if 'region' in state_manager.get_item('face_mask_types'):
-		region_mask = create_region_mask(crop_vision_frame, state_manager.get_item('face_mask_regions'))
-		crop_masks.append(region_mask)
+		if 'region' in state_manager.get_item('face_mask_types'):
+			region_mask = create_region_mask(crop_vision_frame, state_manager.get_item('face_mask_regions'))
+			crop_masks.append(region_mask)
 
-	crop_mask = numpy.minimum.reduce(crop_masks).clip(0, 1)
+		crop_mask = numpy.minimum.reduce(crop_masks).clip(0, 1)
 	# track_token already retrieved earlier for warp, reuse for paste_back
-	paste_vision_frame = paste_back(temp_vision_frame, crop_vision_frame, crop_mask, affine_matrix, track_token=track_token)
+	with profiler.measure('swapper_paste_ms'):
+		paste_vision_frame = paste_back(temp_vision_frame, crop_vision_frame, crop_mask, affine_matrix, track_token=track_token)
 	return paste_vision_frame
 
 
@@ -1127,7 +1137,8 @@ def forward_swap_face(source_face : Face, target_face : Face, crop_vision_frame 
 			face_swapper_inputs[face_swapper_input.name] = crop_vision_frame
 
 	with conditional_thread_semaphore():
-		crop_vision_frame = face_swapper.run(None, face_swapper_inputs)[0][0]
+		with profiler.measure('swapper_onnx_ms'):
+			crop_vision_frame = face_swapper.run(None, face_swapper_inputs)[0][0]
 
 	return crop_vision_frame
 
@@ -1253,8 +1264,9 @@ def process_frame(inputs : FaceSwapperInputs) -> VisionFrame:
     target_vision_frame = inputs.get('target_vision_frame')
     temp_vision_frame = inputs.get('temp_vision_frame')
     # Cache source face across frames for multi-thread speed
-    source_face = _get_cached_source_face(source_vision_frames)
-    target_faces = select_faces(reference_vision_frame, target_vision_frame)
+    with profiler.measure('swapper_face_selection_ms'):
+        source_face = _get_cached_source_face(source_vision_frames)
+        target_faces = select_faces(reference_vision_frame, target_vision_frame)
 
     if source_face and target_faces:
         # Batch all faces + pixel boost tiles through a single ONNX run

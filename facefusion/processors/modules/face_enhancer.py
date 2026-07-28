@@ -287,24 +287,30 @@ def post_process() -> None:
 def enhance_face(target_face : Face, temp_vision_frame : VisionFrame) -> VisionFrame:
 	model_template = get_model_options().get('template')
 	model_size = get_model_options().get('size')
-	crop_vision_frame, affine_matrix = warp_face_by_face_landmark_5(temp_vision_frame, target_face.landmark_set.get('5/68'), model_template, model_size)
-	box_mask = create_box_mask(crop_vision_frame, state_manager.get_item('face_mask_blur'), (0, 0, 0, 0))
-	crop_masks =\
-	[
-		box_mask
-	]
+	with profiler.measure('enhancer_warp_ms'):
+		crop_vision_frame, affine_matrix = warp_face_by_face_landmark_5(temp_vision_frame, target_face.landmark_set.get('5/68'), model_template, model_size)
+	with profiler.measure('enhancer_mask_ms'):
+		box_mask = create_box_mask(crop_vision_frame, state_manager.get_item('face_mask_blur'), (0, 0, 0, 0))
+		crop_masks =\
+		[
+			box_mask
+		]
 
-	if 'occlusion' in state_manager.get_item('face_mask_types'):
-		occlusion_mask = create_occlusion_mask(crop_vision_frame)
-		crop_masks.append(occlusion_mask)
+		if 'occlusion' in state_manager.get_item('face_mask_types'):
+			occlusion_mask = create_occlusion_mask(crop_vision_frame)
+			crop_masks.append(occlusion_mask)
 
-	crop_vision_frame = prepare_crop_frame(crop_vision_frame)
+	with profiler.measure('enhancer_preprocess_ms'):
+		crop_vision_frame = prepare_crop_frame(crop_vision_frame)
 	face_enhancer_weight = numpy.array([ state_manager.get_item('face_enhancer_weight') ]).astype(numpy.double)
 	crop_vision_frame = forward(crop_vision_frame, face_enhancer_weight)
-	crop_vision_frame = normalize_crop_frame(crop_vision_frame)
-	crop_mask = numpy.minimum.reduce(crop_masks).clip(0, 1)
-	paste_vision_frame = paste_back(temp_vision_frame, crop_vision_frame, crop_mask, affine_matrix)
-	temp_vision_frame = blend_paste_frame(temp_vision_frame, paste_vision_frame)
+	with profiler.measure('enhancer_postprocess_ms'):
+		crop_vision_frame = normalize_crop_frame(crop_vision_frame)
+	with profiler.measure('enhancer_paste_ms'):
+		crop_mask = numpy.minimum.reduce(crop_masks).clip(0, 1)
+		paste_vision_frame = paste_back(temp_vision_frame, crop_vision_frame, crop_mask, affine_matrix)
+	with profiler.measure('enhancer_blend_ms'):
+		temp_vision_frame = blend_paste_frame(temp_vision_frame, paste_vision_frame)
 	return temp_vision_frame
 
 
@@ -361,7 +367,8 @@ def process_frame(inputs : FaceEnhancerInputs) -> VisionFrame:
 	reference_vision_frame = inputs.get('reference_vision_frame')
 	target_vision_frame = inputs.get('target_vision_frame')
 	temp_vision_frame = inputs.get('temp_vision_frame')
-	target_faces = select_faces(reference_vision_frame, target_vision_frame)
+	with profiler.measure('enhancer_face_selection_ms'):
+		target_faces = select_faces(reference_vision_frame, target_vision_frame)
 
 	if target_faces:
 		for target_face in target_faces:

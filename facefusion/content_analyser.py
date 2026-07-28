@@ -4,7 +4,7 @@ from typing import List, Tuple
 import numpy
 from tqdm import tqdm
 
-from facefusion import inference_manager, state_manager, wording
+from facefusion import inference_manager, profiler, state_manager, wording
 from facefusion.common_helper import is_macos
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.execution import has_execution_provider
@@ -169,9 +169,10 @@ def analyse_video(video_path : str, trim_frame_start : int, trim_frame_end : int
 
 
 def detect_nsfw(vision_frame : VisionFrame) -> bool:
-	is_nsfw_1 = detect_with_nsfw_1(vision_frame)
-	is_nsfw_2 = detect_with_nsfw_2(vision_frame)
-	is_nsfw_3 = detect_with_nsfw_3(vision_frame)
+	with profiler.measure('content_analysis_total_ms'):
+		is_nsfw_1 = detect_with_nsfw_1(vision_frame)
+		is_nsfw_2 = detect_with_nsfw_2(vision_frame)
+		is_nsfw_3 = detect_with_nsfw_3(vision_frame)
 
 	return is_nsfw_1 and is_nsfw_2 or is_nsfw_1 and is_nsfw_3 or is_nsfw_2 and is_nsfw_3
 
@@ -201,10 +202,11 @@ def forward_nsfw(vision_frame : VisionFrame, model_name : str) -> Detection:
 	content_analyser = get_inference_pool().get(model_name)
 
 	with conditional_thread_semaphore():
-		detection = content_analyser.run(None,
-		{
-			'input': vision_frame
-		})[0]
+		with profiler.measure(f'content_{model_name}_onnx_ms'):
+			detection = content_analyser.run(None,
+			{
+				'input': vision_frame
+			})[0]
 
 	if model_name in [ 'nsfw_2', 'nsfw_3' ]:
 		return detection[0]

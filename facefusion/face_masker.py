@@ -5,7 +5,7 @@ import cv2
 import numpy
 
 import facefusion.choices
-from facefusion import inference_manager, state_manager
+from facefusion import inference_manager, profiler, state_manager
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.filesystem import resolve_relative_path
 from facefusion.thread_helper import conditional_thread_semaphore
@@ -228,10 +228,11 @@ def forward_occlude_face(prepare_vision_frame : VisionFrame, model_name : str) -
 	face_occluder = get_inference_pool().get(model_name)
 
 	with conditional_thread_semaphore():
-		occlusion_mask : Mask = face_occluder.run(None,
-		{
-			'input': prepare_vision_frame
-		})[0][0]
+		with profiler.measure(f'occluder_{model_name}_onnx_ms'):
+			occlusion_mask : Mask = face_occluder.run(None,
+			{
+				'input': prepare_vision_frame
+			})[0][0]
 
 	return occlusion_mask
 
@@ -241,9 +242,10 @@ def forward_parse_face(prepare_vision_frame : VisionFrame) -> Mask:
 	face_parser = get_inference_pool().get(model_name)
 
 	with conditional_thread_semaphore():
-		region_mask : Mask = face_parser.run(None,
-		{
-			'input': prepare_vision_frame
-		})[0][0]
+		with profiler.measure(f'parser_{model_name}_onnx_ms'):
+			region_mask : Mask = face_parser.run(None,
+			{
+				'input': prepare_vision_frame
+			})[0][0]
 
 	return region_mask
