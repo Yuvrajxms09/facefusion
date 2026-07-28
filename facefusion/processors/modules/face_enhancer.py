@@ -5,7 +5,7 @@ import numpy
 
 import facefusion.jobs.job_manager
 import facefusion.jobs.job_store
-from facefusion import config, content_analyser, face_classifier, face_detector, face_landmarker, face_masker, face_recognizer, inference_manager, logger, state_manager, video_manager, wording
+from facefusion import config, content_analyser, face_classifier, face_detector, face_landmarker, face_masker, face_recognizer, inference_manager, logger, profiler, state_manager, video_manager, wording
 from facefusion.common_helper import create_float_metavar, create_int_metavar
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_analyser import scale_face
@@ -319,7 +319,8 @@ def forward(crop_vision_frame : VisionFrame, face_enhancer_weight : FaceEnhancer
 			face_enhancer_inputs[face_enhancer_input.name] = face_enhancer_weight
 
 	with thread_semaphore():
-		crop_vision_frame = face_enhancer.run(None, face_enhancer_inputs)[0][0]
+		with profiler.measure('enhancer_ms'):
+			crop_vision_frame = face_enhancer.run(None, face_enhancer_inputs)[0][0]
 
 	return crop_vision_frame
 

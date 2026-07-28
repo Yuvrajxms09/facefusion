@@ -872,6 +872,7 @@ def swap_faces_batch(source_face : Face, target_faces : List[Face], target_visio
 			for sf in [scale_face(tf, target_vision_frame, temp_vision_frame) for tf in target_faces]:
 				temp_vision_frame = swap_face(source_face, sf, temp_vision_frame)
 			seq_total = (time() - seq_start) * 1000.0
+			profiler.add('swapper_seq_ms', seq_total)
 			# per-frame verbose logs removed for speed at info level
 			return temp_vision_frame
 
@@ -1039,6 +1040,9 @@ def swap_faces_batch(source_face : Face, target_faces : List[Face], target_visio
 	tiles_batched = len(map_items)
 	onnx_ms = ((t_run_end - t_run_start) * 1000.0) if 't_run_start' in locals() and 't_run_end' in locals() else -1.0
 	paste_ms = (paste_end - paste_start) * 1000.0
+	if onnx_ms >= 0:
+		profiler.add('swapper_onnx_ms', onnx_ms)
+	profiler.add('swapper_paste_ms', paste_ms)
 	# per-frame verbose logs removed for speed at info level
 	return temp_vision_frame
 

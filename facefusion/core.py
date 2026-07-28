@@ -14,7 +14,7 @@ import cv2
 import numpy
 from tqdm import tqdm
 
-from facefusion import benchmarker, cli_helper, content_analyser, face_classifier, face_detector, face_landmarker, face_masker, face_recognizer, gpu_video_pipeline, hash_helper, logger, process_manager, state_manager, video_manager, voice_extractor, wording
+from facefusion import benchmarker, cli_helper, content_analyser, face_classifier, face_detector, face_landmarker, face_masker, face_recognizer, gpu_video_pipeline, hash_helper, logger, process_manager, profiler, state_manager, video_manager, voice_extractor, wording
 from facefusion.args import apply_args, collect_job_args, reduce_job_args, reduce_step_args
 from facefusion.audio import create_empty_audio_frame, get_audio_frame, get_voice_frame
 from facefusion.common_helper import get_first
@@ -528,6 +528,7 @@ def process_video(start_time : float) -> ErrorCode:
 	clear_temp_directory(state_manager.get_item('target_path'))
 
 	if is_video(state_manager.get_item('output_path')):
+		profiler.log_summary('video')
 		logger.info(wording.get('processing_video_succeeded').format(seconds = calculate_end_time(start_time)), __name__)
 	else:
 		logger.error(wording.get('processing_video_failed'), __name__)
@@ -563,20 +564,27 @@ def _resolve_audio_frames(source_audio_path : Optional[str], temp_video_fps : fl
 
 
 def process_frame_runtime(target_vision_frame : numpy.ndarray, frame_number : int, reference_vision_frame : numpy.ndarray, source_vision_frames : List[numpy.ndarray], source_audio_path : Optional[str], temp_video_fps : float) -> numpy.ndarray:
-	temp_vision_frame = target_vision_frame.copy()
-	source_audio_frame, source_voice_frame = _resolve_audio_frames(source_audio_path, temp_video_fps, frame_number)
+	profiler.inc_frames()
+	with profiler.measure('frame_total_ms'):
+		with profiler.measure('frame_copy_ms'):
+			temp_vision_frame = target_vision_frame.copy()
+		with profiler.measure('audio_ms'):
+			source_audio_frame, source_voice_frame = _resolve_audio_frames(source_audio_path, temp_video_fps, frame_number)
 
-	for processor_module in get_processors_modules(state_manager.get_item('processors')):
-		temp_vision_frame = processor_module.process_frame(
-		{
-			'reference_vision_frame': reference_vision_frame,
-			'source_vision_frames': source_vision_frames,
-			'source_audio_frame': source_audio_frame,
-			'source_voice_frame': source_voice_frame,
-			'target_vision_frame': target_vision_frame,
-			'temp_vision_frame': temp_vision_frame
-		})
-	return temp_vision_frame
+		with profiler.measure('processor_total_ms'):
+			for processor_module in get_processors_modules(state_manager.get_item('processors')):
+				module_name = processor_module.__name__.rsplit('.', 1)[-1]
+				with profiler.measure(f'processor_{module_name}_ms'):
+					temp_vision_frame = processor_module.process_frame(
+					{
+						'reference_vision_frame': reference_vision_frame,
+						'source_vision_frames': source_vision_frames,
+						'source_audio_frame': source_audio_frame,
+						'source_voice_frame': source_voice_frame,
+						'target_vision_frame': target_vision_frame,
+						'temp_vision_frame': temp_vision_frame
+					})
+		return temp_vision_frame
 
 
 def process_temp_frame(temp_frame_path : str, frame_number : int) -> bool:
@@ -620,7 +628,8 @@ def _flush_stream_future(inflight : Deque[Tuple[int, Future[numpy.ndarray]]], wr
 	if frame_data.dtype != numpy.uint8:
 		frame_data = frame_data.clip(0, 255).astype(numpy.uint8)
 	if writer.stdin:
-		writer.stdin.write(frame_data.tobytes())
+		with profiler.measure('video_io_ms'):
+			writer.stdin.write(frame_data.tobytes())
 	progress.update()
 	return True
 

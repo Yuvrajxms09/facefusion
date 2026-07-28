@@ -4,7 +4,7 @@ from typing import Tuple
 import cv2
 import numpy
 
-from facefusion import inference_manager, state_manager
+from facefusion import inference_manager, profiler, state_manager
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_helper import create_rotation_matrix_and_size, estimate_matrix_by_face_landmark_5, transform_points, warp_face_by_translation
 from facefusion.filesystem import resolve_relative_path
@@ -190,10 +190,11 @@ def forward_with_2dfan4(crop_vision_frame : VisionFrame) -> Tuple[Prediction, Pr
 	face_landmarker = get_inference_pool().get('2dfan4')
 
 	with conditional_thread_semaphore():
-		prediction = face_landmarker.run(None,
-		{
-			'input': [ crop_vision_frame ]
-		})
+		with profiler.measure('landmarker_ms'):
+			prediction = face_landmarker.run(None,
+			{
+				'input': [ crop_vision_frame ]
+			})
 
 		return prediction
 
@@ -202,10 +203,11 @@ def forward_with_peppa_wutz(crop_vision_frame : VisionFrame) -> Prediction:
 	face_landmarker = get_inference_pool().get('peppa_wutz')
 
 	with conditional_thread_semaphore():
-		prediction = face_landmarker.run(None,
-		{
-			'input': crop_vision_frame
-		})[0]
+		with profiler.measure('landmarker_ms'):
+			prediction = face_landmarker.run(None,
+			{
+				'input': crop_vision_frame
+			})[0]
 
 		return prediction
 
@@ -214,9 +216,10 @@ def forward_fan_68_5(face_landmark_5 : FaceLandmark5) -> FaceLandmark68:
 	face_landmarker = get_inference_pool().get('fan_68_5')
 
 	with conditional_thread_semaphore():
-		face_landmark_68_5 = face_landmarker.run(None,
-		{
-			'input': [ face_landmark_5 ]
-		})[0][0]
+		with profiler.measure('landmarker_ms'):
+			face_landmark_68_5 = face_landmarker.run(None,
+			{
+				'input': [ face_landmark_5 ]
+			})[0][0]
 
 		return face_landmark_68_5

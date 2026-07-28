@@ -3,7 +3,7 @@ from typing import List, Tuple
 
 import numpy
 
-from facefusion import inference_manager
+from facefusion import inference_manager, profiler
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_helper import warp_face_by_face_landmark_5
 from facefusion.filesystem import resolve_relative_path
@@ -86,10 +86,11 @@ def forward(crop_vision_frame : VisionFrame) -> Tuple[List[int], List[int], List
 	face_classifier = get_inference_pool().get('face_classifier')
 
 	with conditional_thread_semaphore():
-		race_id, gender_id, age_id = face_classifier.run(None,
-		{
-			'input': crop_vision_frame
-		})
+		with profiler.measure('classifier_ms'):
+			race_id, gender_id, age_id = face_classifier.run(None,
+			{
+				'input': crop_vision_frame
+			})
 
 	return gender_id, age_id, race_id
 

@@ -4,7 +4,7 @@ from typing import List, Sequence, Tuple
 import cv2
 import numpy
 
-from facefusion import inference_manager, state_manager
+from facefusion import inference_manager, profiler, state_manager
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_helper import create_rotation_matrix_and_size, create_static_anchors, distance_to_bounding_box, distance_to_face_landmark_5, normalize_bounding_box, transform_bounding_box, transform_points
 from facefusion.filesystem import resolve_relative_path
@@ -363,10 +363,11 @@ def forward_with_retinaface(detect_vision_frame : VisionFrame) -> Detection:
 	face_detector = get_inference_pool().get('retinaface')
 
 	with thread_semaphore():
-		detection = face_detector.run(None,
-		{
-			'input': detect_vision_frame
-		})
+		with profiler.measure('detector_ms'):
+			detection = face_detector.run(None,
+			{
+				'input': detect_vision_frame
+			})
 
 	return detection
 
@@ -375,10 +376,11 @@ def forward_with_scrfd(detect_vision_frame : VisionFrame) -> Detection:
 	face_detector = get_inference_pool().get('scrfd')
 
 	with thread_semaphore():
-		detection = face_detector.run(None,
-		{
-			'input': detect_vision_frame
-		})
+		with profiler.measure('detector_ms'):
+			detection = face_detector.run(None,
+			{
+				'input': detect_vision_frame
+			})
 
 	return detection
 
@@ -387,10 +389,11 @@ def forward_with_yolo_face(detect_vision_frame : VisionFrame) -> Detection:
 	face_detector = get_inference_pool().get('yolo_face')
 
 	with thread_semaphore():
-		detection = face_detector.run(None,
-		{
-			'input': detect_vision_frame
-		})
+		with profiler.measure('detector_ms'):
+			detection = face_detector.run(None,
+			{
+				'input': detect_vision_frame
+			})
 
 	return detection
 
@@ -399,10 +402,11 @@ def forward_with_yunet(detect_vision_frame : VisionFrame) -> Detection:
 	face_detector = get_inference_pool().get('yunet')
 
 	with thread_semaphore():
-		detection = face_detector.run(None,
-		{
-			'input': detect_vision_frame
-		})
+		with profiler.measure('detector_ms'):
+			detection = face_detector.run(None,
+			{
+				'input': detect_vision_frame
+			})
 
 	return detection
 

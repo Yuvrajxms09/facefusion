@@ -3,7 +3,7 @@ from typing import Tuple
 
 import numpy
 
-from facefusion import inference_manager
+from facefusion import inference_manager, profiler
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_helper import warp_face_by_face_landmark_5
 from facefusion.filesystem import resolve_relative_path
@@ -79,9 +79,10 @@ def forward(crop_vision_frame : VisionFrame) -> Embedding:
 	face_recognizer = get_inference_pool().get('face_recognizer')
 	
 	with conditional_thread_semaphore():
-		face_embedding = face_recognizer.run(None,
-        {
-            'input': crop_vision_frame
-        })[0]
+		with profiler.measure('recognizer_ms'):
+			face_embedding = face_recognizer.run(None,
+			{
+				'input': crop_vision_frame
+			})[0]
 
 	return face_embedding
