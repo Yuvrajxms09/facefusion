@@ -135,8 +135,11 @@ def common_pre_check() -> bool:
 
 	content_analyser_content = inspect.getsource(content_analyser).encode()
 	content_analyser_hash = hash_helper.create_hash(content_analyser_content)
+	content_analyser_valid = content_analyser_hash == 'a8d7f066'
 
-	return all(module.pre_check() for module in common_modules) and content_analyser_hash == '803b5ec7'
+	if not content_analyser_valid:
+		logger.error(f'Content analyser integrity check failed: {content_analyser_hash}', __name__)
+	return all(module.pre_check() for module in common_modules) and content_analyser_valid
 
 
 def processors_pre_check() -> bool:
